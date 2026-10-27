@@ -42,6 +42,11 @@ interface TraceStore {
     fun loadFrame(): SavedFrame?
 
     fun saveFrame(frame: SavedFrame?)
+
+    /** Pieces finished at least once. */
+    fun loadDone(): Set<String>
+
+    fun saveDone(done: Set<String>)
 }
 
 class PrefsTraceStore(context: Context) : TraceStore {
@@ -90,7 +95,14 @@ class PrefsTraceStore(context: Context) : TraceStore {
         prefs.edit().putString(KEY_FRAME, o.toString()).apply()
     }
 
+    override fun loadDone(): Set<String> = prefs.getStringSet(KEY_DONE, emptySet())?.toSet() ?: emptySet()
+
+    override fun saveDone(done: Set<String>) {
+        prefs.edit().putStringSet(KEY_DONE, done).apply()
+    }
+
     private companion object {
+        const val KEY_DONE = "done"
         const val KEY_FRAME = "frame"
     }
 }

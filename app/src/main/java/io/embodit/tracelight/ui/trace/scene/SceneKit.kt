@@ -97,6 +97,9 @@ internal class TraceMaterials(private val shared: SharedResources) {
     val faint: Material = sheer(TraceColors.White, 0.25f)
     val divider: Material = sheer(TraceColors.White, 0.45f)
     val debug: Material = sheer(TraceColors.Debug, 0.5f)
+    /** Earlier steps of a drawing: the guide colour, faded. */
+    val traceBluePast: Material = sheer(TraceColors.TraceBlue, 0.38f)
+    val grid: Material = sheer(TraceColors.White, 0.3f)
 
     private fun unlit(color: Color): Material =
         shared.keep(
@@ -259,6 +262,7 @@ internal class TraceMeshes(shared: SharedResources) {
     val band: MeshResource = shared.keep(MeshFactory.unitBand("unitBand"))
     val dashes: MeshResource = shared.keep(MeshFactory.unitBand("unitDashes", dashes = 12))
     val ring: MeshResource = shared.keep(MeshFactory.ring("cornerRing", inner = 0.83f))
+    val disc: MeshResource = shared.keep(MeshFactory.ring("disc", inner = 0f, segments = 20))
 }
 
 /** A box entity on the shared unit cube: placed by centre, size and rotation. */

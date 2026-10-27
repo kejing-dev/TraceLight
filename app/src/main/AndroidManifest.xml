@@ -5,11 +5,6 @@
     <!-- No network, no camera: plane detection, spatial mesh and anchors need no runtime permission on
          the emulator (design container.permissions; device to be confirmed). -->
 
-    <!-- The passthrough camera, read back to find the sheet of paper (SpatialML Readback Mode). -->
-    <uses-permission android:name="android.permission.CAMERA" />
-    <!-- Readback of camera-derived tensors also needs this (Secure MR server log, 2026-10-23: "readbackTensor >>> caller is not granted with Permission: com.picovr.permission.SPATIAL_DATA"). -->
-    <uses-permission android:name="com.picovr.permission.SPATIAL_DATA" />
-
     <application
         android:name=".platform.SpatialApplication"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -20,10 +15,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.TraceLight"
         tools:targetApi="31">
-
-        <meta-data
-            android:name="pico.spatial.use_experimental_api"
-            android:value="1" />
 
         <activity
             android:name=".platform.LaunchActivity"

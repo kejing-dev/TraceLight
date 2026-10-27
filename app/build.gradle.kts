@@ -12,8 +12,8 @@ android {
         applicationId = "io.embodit.tracelight"
         minSdk = 35
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters.add("arm64-v8a") }
@@ -44,8 +44,6 @@ android {
 }
 
 dependencies {
-    implementation(libs.spatial.ml.securemr)
-    implementation(libs.spatial.ml.readback)
     implementation(libs.androidx.core.ktx)
     implementation(platform(libs.spatial.bom))
     implementation(libs.spatial.core)

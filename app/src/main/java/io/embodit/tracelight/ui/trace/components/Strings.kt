@@ -42,9 +42,9 @@ object PanelSizes {
     const val LESSON_W = 480f
     const val LESSON_H = 320f
 
-    /** The calibration page (S20, spike / debug build only): the lesson panel's maximum height. */
-    const val CALIB_W = 480f
-    const val CALIB_H = 420f
+    /** The drawing panel (S07 library · S09 tracing · S12 done · S14 free drawing). */
+    const val DRAW_W = 560f
+    const val DRAW_H = 400f
 
     const val DISABLED_ALPHA = 0.38f
 }

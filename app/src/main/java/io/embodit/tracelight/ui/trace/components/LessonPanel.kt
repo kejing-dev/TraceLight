@@ -44,16 +44,14 @@ import io.embodit.tracelight.ui.trace.TraceUiState
 import io.embodit.tracelight.ui.trace.debug.probe
 import io.embodit.tracelight.ui.theme.TraceColors
 import io.embodit.tracelight.ui.theme.TraceType
-import kotlin.math.roundToInt
 
 private val KeyH = 48.dp
 private val PrimaryW = 168.dp
 private val SecondaryW = 120.dp
 
 /**
- * The lesson panel during the alignment flow (design `panels.lesson.content.setup`: S00 - S06, S16,
- * S18): one big instruction, a small figure (the four corners, the current one lit), one primary
- * button and, where there is an old sheet, a secondary one. Density cap: <= 1 primary + 1 secondary.
+ * The setup panel (S00 - S06, S16): one big instruction, a small figure (the four corners, the current
+ * one lit), one primary button and, where there is an old sheet, a secondary one.
  */
 @Composable
 internal fun LessonPanel(state: TraceUiState?, onEvent: (TraceEvent) -> Unit) {
@@ -76,32 +74,14 @@ internal fun LessonPanel(state: TraceUiState?, onEvent: (TraceEvent) -> Unit) {
                 Secondary(state, onEvent)
             }
             "S03" ->
-                when {
-                    // automatic alignment (design change 2026-10-23): the camera found the sheet
-                    state.found != null && state.foundStable ->
-                        Instruction(icon = R.drawable.ic_check, text = rs(R.string.s03_found), hint = rs(R.string.s03_found_hint)) {
-                            SecondaryButton(rs(R.string.s03_adjust), "autoAdjust", width = 132.dp) { onEvent(TraceEvent.AutoAdjustClicked) }
-                            Primary(rs(R.string.s04_aligned), "autoAccept") { onEvent(TraceEvent.AutoAcceptClicked) }
-                        }
-                    state.found != null ->
-                        Instruction(icon = R.drawable.ic_paper, text = rs(R.string.s03_finding), hint = rs(R.string.s03_hold_still)) {
-                            Secondary(state, onEvent)
-                        }
-                    else ->
-                        Instruction(icon = R.drawable.ic_paper, text = rs(R.string.s03_look), hint = if (state.searchSlow) rs(R.string.s03_slow) else null) {
-                            Secondary(state, onEvent)
-                        }
+                Instruction(icon = R.drawable.ic_paper, text = rs(R.string.s03_drop), hint = if (state.ghostOnDesk) rs(R.string.s03_hint) else rs(R.string.s03_not_desk), hintColor = if (state.ghostOnDesk) null else PicoTheme.colorScheme.error) {
+                    Secondary(state, onEvent)
                 }
             "S04" -> AlignCorners(state, onEvent)
-            "S05" -> CornerOff(state, onEvent)
             "S06" -> Done()
             "S16" ->
                 Instruction(icon = R.drawable.ic_look_down, text = rs(R.string.s16_no_desk), hint = rs(R.string.s16_hint)) {
                     Primary(rs(R.string.s16_retry), "retryDesk") { onEvent(TraceEvent.RetryDeskClicked) }
-                }
-            "S18" ->
-                Instruction(icon = R.drawable.ic_warning, text = rs(R.string.s18_permission), hint = null) {
-                    Primary(rs(R.string.s18_grant), "grant") { onEvent(TraceEvent.RetryDeskClicked) }
                 }
             else -> Unit
         }
@@ -167,7 +147,7 @@ private fun Secondary(state: TraceUiState, onEvent: (TraceEvent) -> Unit) {
 
 private fun cornerNumber(i: Int): String = "①②③④"[i].toString()
 
-/** S04: drag ② to the lower right corner (first time) / ① is it on? (re-check). */
+/** S04: drag the corners onto the paper's corners (any sheet), then 对好了 straight away. */
 @Composable
 private fun ColumnScope.AlignCorners(state: TraceUiState, onEvent: (TraceEvent) -> Unit) {
     val ink = PicoTheme.colorScheme.labelPrimary
@@ -175,27 +155,16 @@ private fun ColumnScope.AlignCorners(state: TraceUiState, onEvent: (TraceEvent) 
     Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
         CornerFigure(state, size = 76.dp)
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            val line =
-                if (state.recheck) rs(R.string.s04_recheck, cornerNumber(i))
-                else if (state.allCornersSet) rs(R.string.s04_all_set)
-                else rs(R.string.s04_drag, cornerNumber(i), rs(cornerName(i)))
+            val line = if (state.allCornersSet) rs(R.string.s04_all_set) else rs(R.string.s04_drag, cornerNumber(i), rs(cornerName(i)))
             Text(text = line, color = ink, style = TraceType.instruction, maxLines = 3)
+            Text(text = rs(R.string.s04_move_hint), color = PicoTheme.colorScheme.labelSecondary, style = TraceType.hint, maxLines = 2)
         }
     }
-    if (state.controller) {
-        Text(text = rs(R.string.hint_stick), color = PicoTheme.colorScheme.labelSecondary, style = TraceType.hint, maxLines = 1)
-        Text(text = rs(R.string.s04_tip), color = PicoTheme.colorScheme.labelSecondary, style = TraceType.hint, maxLines = 1)
-    }
+    if (state.controller) Text(text = rs(R.string.hint_stick), color = PicoTheme.colorScheme.labelSecondary, style = TraceType.hint, maxLines = 1)
     Spacer(modifier = Modifier.weight(1f))
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
-        if (state.recheck) {
-            if (state.previous != null) SecondaryButton(rs(R.string.action_cancel), "cancel") { onEvent(TraceEvent.CancelClicked) }
-            if (state.confirmed >= 4) Primary(rs(R.string.s04_aligned), "confirm") { onEvent(TraceEvent.ConfirmClicked) }
-            else Primary(rs(R.string.s04_corner_ok), "cornerOk") { onEvent(TraceEvent.CornerOkClicked) }
-        } else {
-            SecondaryButton(rs(R.string.action_restart), "restart") { onEvent(TraceEvent.RestartClicked) }
-            Primary(rs(R.string.s04_aligned), "confirm", enabled = state.allCornersSet) { onEvent(TraceEvent.ConfirmClicked) }
-        }
+        if (state.previous != null) SecondaryButton(rs(R.string.action_cancel), "cancel") { onEvent(TraceEvent.CancelClicked) } else SecondaryButton(rs(R.string.action_restart), "restart") { onEvent(TraceEvent.RestartClicked) }
+        Primary(rs(R.string.s04_aligned), "confirm") { onEvent(TraceEvent.ConfirmClicked) }
     }
 }
 
@@ -206,29 +175,6 @@ private fun cornerName(i: Int): Int =
         2 -> R.string.corner_ur
         else -> R.string.corner_ul
     }
-
-/** S05: ③ is 7 mm off, drag it again (or: this is not A4). */
-@Composable
-private fun ColumnScope.CornerOff(state: TraceUiState, onEvent: (TraceEvent) -> Unit) {
-    val ink = PicoTheme.colorScheme.labelPrimary
-    val v = state.verdict
-    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        CornerFigure(state, size = 76.dp)
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (v != null && v.looksLetter) {
-                Text(text = rs(R.string.s05_letter), color = ink, style = TraceType.instruction, maxLines = 3)
-            } else if (v != null) {
-                Text(text = rs(R.string.s05_off, cornerNumber(v.a4.worst), v.a4.maxMm.roundToInt()), color = ink, style = TraceType.instruction, maxLines = 2)
-                Text(text = rs(R.string.s05_moved), color = PicoTheme.colorScheme.labelSecondary, style = TraceType.hint, maxLines = 1)
-            }
-        }
-    }
-    Spacer(modifier = Modifier.weight(1f))
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
-        SecondaryButton(rs(R.string.action_restart), "restart") { onEvent(TraceEvent.RestartClicked) }
-        Primary(rs(R.string.s04_aligned), "confirm") { onEvent(TraceEvent.ConfirmClicked) }
-    }
-}
 
 @Composable
 private fun Done() {
@@ -247,7 +193,7 @@ private fun Done() {
 @Composable
 internal fun CornerFigure(state: TraceUiState, size: Dp) {
     val line = PicoTheme.colorScheme.labelSecondary
-    val worst = if (state.designState == "S05") state.verdict?.a4?.worst else null
+    val worst: Int? = null
     val placed = state.draft?.moved ?: List(4) { false }
     Canvas(modifier = Modifier.size(size * 0.72f, size)) {
         val w = this.size.width
@@ -261,8 +207,7 @@ internal fun CornerFigure(state: TraceUiState, size: Dp) {
                 when {
                     worst == k -> TraceColors.Coral
                     k == state.activeCorner -> TraceColors.PenAmber
-                    state.recheck && k < state.confirmed -> TraceColors.Jade
-                    !state.recheck && placed[k] -> TraceColors.Jade
+                    placed[k] -> TraceColors.Jade
                     else -> line
                 }
             drawCircle(color = c, radius = if (k == state.activeCorner) 6.dp.toPx() else 4.5.dp.toPx(), center = pts[k])

@@ -79,16 +79,6 @@ fun TraceScreen() {
         TraceLog.i("LIMBS visible result=${r.getOrNull() ?: r.exceptionOrNull()}")
     }
 
-    // automatic alignment reads the passthrough camera (SpatialML readback): ask once; without it the
-    // manual frame still works, and the scene starts the camera as soon as both are granted
-    LaunchedEffect(context) {
-        val perms = arrayOf(android.Manifest.permission.CAMERA, SPATIAL_DATA)
-        val missing = perms.filter { context.checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }
-        val activity = context.findActivity()
-        TraceLog.i("PERM missing=$missing activity=${activity?.javaClass?.simpleName}")
-        if (missing.isNotEmpty() && activity != null) androidx.core.app.ActivityCompat.requestPermissions(activity, missing.toTypedArray(), 7)
-    }
-
     // the in-app language switches at run time: panels read their copy from this local
     val resources = remember(state.settings.language, context) { localizedResources(context, state.settings.language) }
     CompositionLocalProvider(LocalTraceResources provides resources) {
@@ -96,13 +86,3 @@ fun TraceScreen() {
     }
 }
 
-private const val SPATIAL_DATA = "com.picovr.permission.SPATIAL_DATA"
-
-private fun android.content.Context.findActivity(): android.app.Activity? {
-    var c: android.content.Context? = this
-    while (c is android.content.ContextWrapper) {
-        if (c is android.app.Activity) return c
-        c = c.baseContext
-    }
-    return null
-}

@@ -1,74 +1,70 @@
 package io.embodit.tracelight.ui.trace
 
 import io.embodit.tracelight.domain.CornerDraft
-import io.embodit.tracelight.domain.FitVerdict
+import io.embodit.tracelight.domain.Library
 import io.embodit.tracelight.domain.P2
 import io.embodit.tracelight.domain.PaperPose
+import io.embodit.tracelight.domain.Piece
 import io.embodit.tracelight.domain.Settings
 
 /**
- * Calibration page (S20, spike build): the round being run, its drag gain, when it started, how many
- * readings were logged, the test figure and the pen-grip tap test (design `preconditions.deviceSpike`).
- */
-data class Calib(
-    val round: Int = 1,
-    val gain: Float = 0.5f,
-    val startedAtMs: Long = 0L,
-    val records: Int = 0,
-    val testFigure: Boolean = false,
-    val taps: Int = 0,
-    val heightMm: Int = 0,
-)
-
-/**
- * Everything the panels and the scene draw. [designState] is the design package's state id (S00 - S20),
- * the one number QA screenshots are named after.
+ * Everything the panels and the scene draw. [designState] names the state the QA screenshots follow
+ * (v0.2.0 flow, user 2026-10-26: align by hand, then draw straight away):
+ * S00 loading · S01 welcome · S02 finding the desk · S03 drop the frame · S04 drag the corners ·
+ * S06 aligned · S07 library · S09 tracing a piece · S12 piece done · S14 free drawing · S16 no desk.
  */
 data class TraceUiState(
     val designState: String = "S00",
     val sceneReady: Boolean = false,
     val deskFound: Boolean = false,
-    /** Corner points while aligning (S04 / S05). */
+    /** Corner points while aligning (S04). */
     val draft: CornerDraft? = null,
-    /** The corner the user is asked about: 0 = ① lower left ... 3 = ④ upper left. */
+    /** The corner the panel asks about: 0 = ① near left ... 3 = ④ far left. */
     val activeCorner: Int = 0,
-    /** Re-check mode: corners prefilled, confirmed one by one (design `corners.recheck`). */
-    val recheck: Boolean = false,
-    val confirmed: Int = 0,
-    /** The fit after 对好了 (S05 reads its worst corner). */
-    val verdict: FitVerdict? = null,
-    /** The aligned sheet (after S06) and its size in metres (any sheet; design change 2026-10-23). */
+    /** The aligned sheet and its size in metres (any sheet). */
     val aligned: PaperPose? = null,
     val sheetW: Float = 0.210f,
     val sheetH: Float = 0.297f,
-    /** The sheet the camera sees now (S03, automatic alignment), and whether it held still for a few frames. */
-    val found: io.embodit.tracelight.domain.SheetRect? = null,
-    val foundStable: Boolean = false,
-    /** S03 has looked for a while without finding a sheet: offer the manual drop. */
-    val searchSlow: Boolean = false,
-    /** The sheet before a re-alignment: snap target and where 取消 goes back to. */
+    /** The sheet before a re-alignment: the snap target and where 取消 goes back to. */
     val previous: PaperPose? = null,
     /** World anchor that holds the aligned sheet (null while it is being made). */
     val anchorId: String? = null,
-    val calib: Calib = Calib(),
     val settings: Settings = Settings(),
-    /** A controller is tracked (S04 shows the tip hint). */
+    /** A controller is tracked (S04 shows the stick hint). */
     val controller: Boolean = false,
     val trackingLost: Boolean = false,
-    /** Gaze rests on the panel: the ghost frame holds still (design S03, R2-3). */
+    /** Gaze rests on the panel: the ghost frame holds still (S03). */
     val ghostFrozen: Boolean = false,
-    /** Where the head ray meets the desk (S03): null = not on a desk (coral ✕). */
+    /** Where the head ray meets the desk (S03): false = not on a desk. */
     val ghostOnDesk: Boolean = false,
+    // ---- drawing
+    val setId: String = Library.sets.first().id,
+    val pieceId: String? = null,
+    /** Index of the step being traced (S09). */
+    val step: Int = 0,
+    /** Pieces finished at least once (local progress). */
+    val done: Set<String> = emptySet(),
+    /** S14: a faint grid on the sheet. */
+    val grid: Boolean = false,
+    /** The ⋯ menu of the drawing panel is open. */
+    val menuOpen: Boolean = false,
 ) {
     val aligning: Boolean
-        get() = designState == "S04" || designState == "S05"
+        get() = designState == "S04"
 
     /** Corners can be dragged now. */
     val dragEnabled: Boolean
         get() = aligning && !trackingLost
 
     val allCornersSet: Boolean
-        get() = if (recheck) confirmed >= 4 else draft?.allMoved == true
+        get() = draft?.allMoved == true
+
+    val piece: Piece?
+        get() = pieceId?.let { Library.piece(it) }
+
+    /** The sheet is in place and the drawing states show it. */
+    val drawing: Boolean
+        get() = aligned != null && designState in setOf("S07", "S09", "S12", "S14")
 }
 
 sealed interface TraceEvent {
@@ -80,26 +76,18 @@ sealed interface TraceEvent {
 
     data class GhostChanged(val onDesk: Boolean, val frozen: Boolean) : TraceEvent
 
-    /** Pinch on the desk in S03: the sheet's centre and heading (long edge along the view). */
+    /** Pinch on the desk in S03: the frame's centre and heading (long edge along the view). */
     data class FrameDropped(val pose: PaperPose) : TraceEvent
 
     data class CornerMoved(val index: Int, val at: P2) : TraceEvent
 
-    /** The camera found a sheet (null: lost it); [stable] once a few frames agree. */
-    data class PaperSeen(val rect: io.embodit.tracelight.domain.SheetRect?, val stable: Boolean) : TraceEvent
-
-    /** S03 with a sheet found: use it (对好了) or fine-tune its corners (手动调整). */
-    data object AutoAcceptClicked : TraceEvent
-
-    data object AutoAdjustClicked : TraceEvent
+    /** The whole frame dragged by its centre handle (S04). */
+    data class FrameMoved(val by: P2) : TraceEvent
 
     /** Thumbstick turn of the whole frame, written on release (radians, about the corners' centroid). */
     data class FrameTurned(val dYaw: Float) : TraceEvent
 
     data object ConfirmClicked : TraceEvent
-
-    /** Re-check: "① 对上了" for the active corner. */
-    data object CornerOkClicked : TraceEvent
 
     data object RestartClicked : TraceEvent
 
@@ -113,18 +101,26 @@ sealed interface TraceEvent {
 
     data class AnchorReady(val id: String?) : TraceEvent
 
-    // ---- calibration page (S20)
-    data object RecordClicked : TraceEvent
+    // ---- drawing
+    data class SetPicked(val id: String) : TraceEvent
 
-    data object TestFigureClicked : TraceEvent
+    data class PiecePicked(val id: String) : TraceEvent
 
-    data class GainClicked(val gain: Float) : TraceEvent
+    data object NextStepClicked : TraceEvent
 
-    data object TestTapClicked : TraceEvent
+    data object PrevStepClicked : TraceEvent
 
-    data object NextRoundClicked : TraceEvent
+    data object NextPieceClicked : TraceEvent
 
-    data class HeightClicked(val deltaMm: Int) : TraceEvent
+    data object LibraryClicked : TraceEvent
+
+    data object FreeDrawClicked : TraceEvent
+
+    data object GridClicked : TraceEvent
+
+    data object MenuClicked : TraceEvent
+
+    data object RealignClicked : TraceEvent
 
     // ---- debug
     data class DebugState(val id: String) : TraceEvent

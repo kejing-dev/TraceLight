@@ -26,8 +26,8 @@ import io.embodit.tracelight.ui.trace.scene.PanelIds
  * pool. Every attachment panel is declared once with a fixed size, shown or not ([TraceScene] parents
  * and places them). Tap and drag recognizers live in separate pointerInput blocks (Spatial Ruler).
  *
- * Window model: single panel with popup (design `container.windowModel`): the lesson panel; the
- * calibration page (debug / spike) takes its place in S20.
+ * Window model: one panel at a time beside the sheet: the setup panel while aligning, the drawing
+ * panel (library, tracing, free drawing) after.
  */
 @Composable
 internal fun TraceStage(state: TraceUiState, scene: TraceScene, onEvent: (TraceEvent) -> Unit) {
@@ -53,8 +53,8 @@ internal fun TraceStage(state: TraceUiState, scene: TraceScene, onEvent: (TraceE
             AttachmentPanel(PanelIds.LESSON) {
                 PoolPanel(PanelIds.LESSON, scene) { inView -> LessonPanel(state = if (inView) state else null, onEvent = onEvent) }
             }
-            AttachmentPanel(PanelIds.CALIB) {
-                PoolPanel(PanelIds.CALIB, scene) { inView -> CalibPanel(state = if (inView) state else null, onEvent = onEvent) }
+            AttachmentPanel(PanelIds.DRAW) {
+                PoolPanel(PanelIds.DRAW, scene) { inView -> DrawPanel(state = if (inView) state else null, onEvent = onEvent) }
             }
         },
         update = { _, attachments ->

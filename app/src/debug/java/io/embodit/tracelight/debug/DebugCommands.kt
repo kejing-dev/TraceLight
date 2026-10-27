@@ -2,12 +2,14 @@ package io.embodit.tracelight.debug
 
 import android.content.Context
 import io.embodit.tracelight.domain.CornerDraft
+import io.embodit.tracelight.domain.Library
 import io.embodit.tracelight.domain.Mm
 import io.embodit.tracelight.domain.P2
 import io.embodit.tracelight.domain.PaperFit
 import io.embodit.tracelight.domain.PaperPose
 import io.embodit.tracelight.domain.PlaneSurface
 import io.embodit.tracelight.domain.Sheet
+import io.embodit.tracelight.domain.SheetRect
 import io.embodit.tracelight.platform.TraceGraph
 import io.embodit.tracelight.platform.TraceLog
 import io.embodit.tracelight.ui.trace.TraceEvent
@@ -20,24 +22,25 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Test hooks of the debug build (design `verification.debugHooks`). One log line (tag `TraceLight`)
- * answers every command. Broadcast: `am broadcast -a io.embodit.tracelight.DEBUG -p io.embodit.tracelight --es cmd NAME [--es s TEXT] [--es a NUMBERS]`.
+ * Test hooks of the debug build. One log line (tag `TraceLight`) answers every command. Broadcast:
+ * `am broadcast -a io.embodit.tracelight.DEBUG -p io.embodit.tracelight --es cmd NAME [--es s TEXT] [--es a NUMBERS]`.
  *
- * Designed states (QA screenshots; the desk must be known for S03 - S20)
- * - `state` s=S00..S06, S16, S18, S20 [a=k]   jump there; S04 a=k: k corners placed (default 2); S05 s2 via `corners`
+ * Designed states (QA screenshots; a desk must be known from S03 on: `desk` makes one in front of the camera)
+ * - `state` s=S00 | S01 | S02 | S03 | S04 [a=k corners placed] | S06 | S07 | S09 [a=step] | S12 | S14 | S16
+ *   S07 / S09 / S12 / S14 seed an A4 sheet on the desk ahead first; S09 / S12 use the piece in `piece` (default cats)
  *
  * Driving
- * - `desk` [a=aheadM,belowM]  a TABLE plane in front of the camera (default 0.45 m ahead, 0.55 m below the eyes)
- * - `seed` [a=aheadM]          drop a sheet on the desk ahead (= a pinch in S03), -> S04
- * - `corners` a=x1,y1,...,x4,y4   the four corner points in mm of the seeded sheet (all placed); `corners` s=off8 / letter
- * - `drag` a=i,dx,dy           move corner i (1..4) by dx, dy mm in the sheet's axes (= a drag release)
- * - `confirm` · `recheck` · `stick` a=x,ms · `ui` s=<control> · `hold` s=on|off · `nodesk` s=on|off · `tracking` s=lost|ok
+ * - `desk` [a=aheadM,belowM] · `seed` [a=aheadM] (= a pinch in S03) · `sheet` a=wMm,hMm (align a sheet of that size ahead)
+ * - `piece` s=<id> [a=step] (lessons: lines-1 .. characters-5) · `set` s=<setId>
+ * - `drag` a=i,dx,dy (corner i 1..4, mm in the sheet's axes) · `move` a=dx,dy (whole frame, mm) · `confirm`
+ * - `stick` a=x,ms · `ui` s=<control> · `hold` s=on|off · `nodesk` s=on|off · `tracking` s=lost|ok
  *
  * Reading back
- * - `dump` (also files/dump.json) · `pose` · `panels` · `planes` · `sheet` · `bounds`
+ * - `dump` (also files/dump.json) · `pose` · `panels` · `planes` · `sheet` · `bounds` · `pieces`
  */
 internal object DebugCommands {
     private const val NO_HOST = "CMD ignored: no Stage"
+    private var piece = "animals-3"
 
     fun run(context: Context, cmd: String, s: String?, a: String?) {
         val host = Probe.host
@@ -69,24 +72,35 @@ internal object DebugCommands {
                 vm.onEvent(TraceEvent.FrameDropped(p))
                 TraceLog.i("CMD seed ${fmt(p)}")
             }
-            "corners" -> corners(vm, scene, s, nums)
+            "sheet" -> {
+                val p = scene.debugSeed() ?: return no("no desk")
+                val w = (nums.getOrNull(0) ?: 210f) / 1000f
+                val h = (nums.getOrNull(1) ?: 297f) / 1000f
+                vm.debugAligned(p, w, h, then = "S07")
+                TraceLog.i("CMD sheet ${w}x$h ${fmt(p)}")
+            }
+            "piece" -> {
+                piece = s ?: piece
+                if (Library.piece(piece) == null) return no("no piece $piece")
+                if (vm.current().aligned == null) scene.debugSeed()?.let { vm.debugAligned(it, then = "S07") }
+                vm.debugPiece(piece, (nums.firstOrNull() ?: 0f).toInt())
+            }
+            "set" -> vm.onEvent(TraceEvent.SetPicked(s ?: "lines"))
             "drag" -> {
                 val st = vm.current()
                 val d = st.draft ?: return no("no draft")
                 val i = (nums.getOrNull(0) ?: 1f).toInt().coerceIn(1, 4) - 1
                 val fit = PaperFit.fit(d, Sheet.A4).pose
-                val dx = (nums.getOrNull(1) ?: 0f) / 1000f
-                val dy = (nums.getOrNull(2) ?: 0f) / 1000f
-                val to = d.points[i] + fit.right * dx + fit.away * dy
+                val to = d.points[i] + fit.right * ((nums.getOrNull(1) ?: 0f) / 1000f) + fit.away * ((nums.getOrNull(2) ?: 0f) / 1000f)
                 scene.debugCorner(i, to)
                 TraceLog.i("CMD drag corner=${i + 1} to=(${to.x}, ${to.z})")
             }
-            "confirm" -> vm.debugConfirm()
-            "recheck" -> {
-                val prev = vm.current().aligned ?: scene.debugSeed() ?: return no("no sheet")
-                vm.debugRecheck(prev)
-                TraceLog.i("CMD recheck ${fmt(prev)}")
+            "move" -> {
+                val d = vm.current().draft ?: return no("no draft")
+                val fit = PaperFit.fit(d, Sheet.A4).pose
+                vm.onEvent(TraceEvent.FrameMoved(fit.right * ((nums.getOrNull(0) ?: 0f) / 1000f) + fit.away * ((nums.getOrNull(1) ?: 0f) / 1000f)))
             }
+            "confirm" -> vm.debugConfirm()
             "stick" -> TraceLog.i("CMD ${scene.debugStick(nums.getOrNull(0) ?: 0f, (nums.getOrNull(1) ?: 1000f).toLong())}")
             "ui" -> ui(vm, s ?: "")
             "hold" -> vm.holdTransient = s != "off"
@@ -94,11 +108,11 @@ internal object DebugCommands {
             "tracking" -> TraceGraph.head.forceLost = s == "lost"
             "park" -> scene.parkPanels()
             "dump" -> dump(context, vm, scene)
-            "cam" -> cam(context, scene, s ?: "frame")
             "pose" -> TraceLog.i(scene.poseLine())
             "panels" -> scene.panelLines().forEach { TraceLog.i(it) }
             "planes" -> scene.planeLines().forEach { TraceLog.i(it) }
-            "sheet" -> scene.sheetLines().forEach { TraceLog.i(it) }
+            "sheet_lines" -> scene.sheetLines().forEach { TraceLog.i(it) }
+            "pieces" -> Library.all.forEach { TraceLog.i("PIECE ${it.id} ${it.zh} level=${it.level} steps=${it.steps.size}") }
             "bounds" -> bounds()
             else -> TraceLog.w("CMD unknown '$cmd'")
         }
@@ -111,53 +125,43 @@ internal object DebugCommands {
     private fun fmt(p: PaperPose) = String.format(Locale.US, "center=%s yaw=%.1f", TraceLog.pos(p.center), Math.toDegrees(p.yaw.toDouble()))
 
     private fun state(vm: TraceViewModel, scene: TraceScene, id: String, nums: List<Float>) {
+        val seeded = { scene.debugSeed() }
         when (id) {
-            "S00", "S01", "S02", "S16", "S18" -> vm.debugJump(id)
+            "S00", "S01", "S02", "S16" -> vm.debugJump(id)
             "S03" -> vm.debugJump("S03")
             "S04" -> {
-                val p = scene.debugSeed() ?: return no("no desk")
+                val p = seeded() ?: return no("no desk")
                 val k = (nums.firstOrNull() ?: 2f).toInt().coerceIn(0, 4)
-                val d = CornerDraft.of(p).let { base -> base.copy(moved = List(4) { it < k }) }
+                val d = CornerDraft.of(SheetRect(p, 0.21f, 0.297f)).let { base -> base.copy(moved = List(4) { it < k }) }
                 vm.debugDraft(d, activeCorner = if (k >= 4) 3 else k)
             }
-            "S04R" -> {
-                val p = vm.current().aligned ?: scene.debugSeed() ?: return no("no desk")
-                vm.debugRecheck(p)
-            }
-            "S05" -> {
-                corners(vm, scene, "off8", emptyList())
-                vm.debugConfirm()
-            }
-            "S05L" -> {
-                corners(vm, scene, "letter", emptyList())
-                vm.debugConfirm()
-            }
             "S06" -> {
-                val p = scene.debugSeed() ?: return no("no desk")
+                val p = seeded() ?: return no("no desk")
                 vm.holdTransient = true
                 vm.debugAligned(p)
             }
-            "S20" -> {
-                val p = scene.debugSeed() ?: return no("no desk")
+            "S07" -> {
+                val p = seeded() ?: return no("no desk")
                 vm.holdTransient = false
-                vm.debugAligned(p)
+                vm.debugAligned(p, then = "S07")
+            }
+            "S09" -> {
+                if (vm.current().aligned == null) seeded()?.let { vm.debugAligned(it, then = "S07") }
+                vm.debugPiece(piece, (nums.firstOrNull() ?: 1f).toInt())
+            }
+            "S12" -> {
+                if (vm.current().aligned == null) seeded()?.let { vm.debugAligned(it, then = "S07") }
+                val p = Library.piece(piece) ?: return no("no piece")
+                vm.debugPiece(piece, p.steps.size - 1)
+                vm.onEvent(TraceEvent.NextStepClicked)
+            }
+            "S14" -> {
+                if (vm.current().aligned == null) seeded()?.let { vm.debugAligned(it, then = "S07") }
+                vm.onEvent(TraceEvent.FreeDrawClicked)
             }
             else -> return no("state $id not in this build")
         }
         TraceLog.i("CMD state $id")
-    }
-
-    /** Four corner points in mm of the seeded sheet; `off8` = A4 with ③ 8 mm out, `letter` = a US Letter sheet. */
-    private fun corners(vm: TraceViewModel, scene: TraceScene, s: String?, nums: List<Float>) {
-        val p = vm.current().draft?.let { PaperFit.fit(it, Sheet.A4).pose } ?: scene.debugSeed() ?: return no("no desk")
-        val mm =
-            when (s) {
-                "off8" -> Sheet.A4.corners.mapIndexed { i, c -> if (i == 2) Mm(c.x + 8f, c.y) else c }
-                "letter" -> Sheet.LETTER.corners
-                else -> if (nums.size >= 8) (0 until 4).map { Mm(nums[it * 2], nums[it * 2 + 1]) } else Sheet.A4.corners
-            }
-        vm.debugDraft(PaperFit.draftFromMm(p, mm), activeCorner = 3)
-        TraceLog.i("CMD corners ${s ?: "mm"} ${mm.joinToString(" ") { "(${it.x}, ${it.y})" }}")
     }
 
     private fun ui(vm: TraceViewModel, control: String) {
@@ -165,18 +169,17 @@ internal object DebugCommands {
             when (control) {
                 "ready" -> TraceEvent.ReadyClicked
                 "confirm" -> TraceEvent.ConfirmClicked
-                "cornerOk" -> TraceEvent.CornerOkClicked
                 "restart" -> TraceEvent.RestartClicked
                 "cancel" -> TraceEvent.CancelClicked
                 "retryDesk" -> TraceEvent.RetryDeskClicked
-                "record" -> TraceEvent.RecordClicked
-                "figure" -> TraceEvent.TestFigureClicked
-                "gain05" -> TraceEvent.GainClicked(0.5f)
-                "gain10" -> TraceEvent.GainClicked(1.0f)
-                "testTap" -> TraceEvent.TestTapClicked
-                "heightUp" -> TraceEvent.HeightClicked(1)
-                "heightDown" -> TraceEvent.HeightClicked(-1)
-                "nextRound" -> TraceEvent.NextRoundClicked
+                "next" -> TraceEvent.NextStepClicked
+                "prev" -> TraceEvent.PrevStepClicked
+                "nextPiece" -> TraceEvent.NextPieceClicked
+                "library" -> TraceEvent.LibraryClicked
+                "free" -> TraceEvent.FreeDrawClicked
+                "grid" -> TraceEvent.GridClicked
+                "menu" -> TraceEvent.MenuClicked
+                "realign" -> TraceEvent.RealignClicked
                 else -> return no("ui '$control'")
             }
         vm.onEvent(e)
@@ -188,13 +191,10 @@ internal object DebugCommands {
         o.put("designState", st.designState)
         o.put("deskFound", st.deskFound)
         o.put("activeCorner", st.activeCorner + 1)
-        o.put("recheck", st.recheck)
-        o.put("confirmed", st.confirmed)
         st.draft?.let { d -> o.put("draft", JSONArray(d.points.mapIndexed { i, p -> JSONObject().put("x", p.x.toDouble()).put("z", p.z.toDouble()).put("moved", d.moved[i]) })); o.put("draftY", d.y.toDouble()) }
-        st.verdict?.let { v -> o.put("fit", JSONObject().put("maxMm", v.a4.maxMm.toDouble()).put("worst", v.a4.worst + 1).put("letter", v.looksLetter).put("residuals", JSONArray(v.a4.residualsMm.map { it.toDouble() }))) }
-        st.aligned?.let { a -> o.put("aligned", JSONObject().put("x", a.center.x.toDouble()).put("y", a.center.y.toDouble()).put("z", a.center.z.toDouble()).put("yawDeg", Math.toDegrees(a.yaw.toDouble()))) }
+        st.aligned?.let { a -> o.put("aligned", JSONObject().put("x", a.center.x.toDouble()).put("y", a.center.y.toDouble()).put("z", a.center.z.toDouble()).put("yawDeg", Math.toDegrees(a.yaw.toDouble())).put("wMm", st.sheetW * 1000.0).put("hMm", st.sheetH * 1000.0)) }
         o.put("anchor", st.anchorId ?: "")
-        o.put("calib", JSONObject().put("round", st.calib.round).put("gain", st.calib.gain.toDouble()).put("records", st.calib.records).put("figure", st.calib.testFigure).put("taps", st.calib.taps).put("heightMm", st.calib.heightMm))
+        o.put("set", st.setId).put("piece", st.pieceId ?: "").put("step", st.step).put("done", JSONArray(st.done.toList())).put("grid", st.grid).put("menu", st.menuOpen)
         o.put("controller", st.controller)
         val text = o.toString()
         TraceLog.i("DUMP $text")
@@ -202,40 +202,13 @@ internal object DebugCommands {
         runCatching { File(context.filesDir, "dump.json").writeText(text) }
     }
 
-    /** Debug `cam` s=name: the last camera frame -> files/cam/<name>.png + <name>.json (intrinsics, head, stereo grid, desks). */
-    private fun cam(context: Context, scene: TraceScene, name: String) {
-        val cam = TraceGraph.camera
-        val f = cam.latest ?: return no("no camera frame (status=${cam.status})")
-        val dir = File(context.getExternalFilesDir(null), "cam").apply { mkdirs() }
-        val bmp = android.graphics.Bitmap.createBitmap(f.width, f.height, android.graphics.Bitmap.Config.ARGB_8888)
-        val px = IntArray(f.width * f.height)
-        for (i in px.indices) {
-            val o = i * 4
-            if (o + 3 >= f.rgba.size) break
-            px[i] = (0xFF shl 24) or ((f.rgba[o].toInt() and 0xFF) shl 16) or ((f.rgba[o + 1].toInt() and 0xFF) shl 8) or (f.rgba[o + 2].toInt() and 0xFF)
-        }
-        bmp.setPixels(px, 0, f.width, 0, 0, f.width, f.height)
-        File(dir, "$name.png").outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-        val o = JSONObject()
-        o.put("w", f.width).put("h", f.height).put("bytes", f.rgba.size)
-        o.put("cam", JSONArray(f.camMatrix.map { it.toDouble() }))
-        o.put("ts", JSONArray(f.timestamp.toList()))
-        o.put("uv", JSONArray(f.uv.map { it.toDouble() }))
-        o.put("points", JSONArray(f.points.map { it.toDouble() }))
-        o.put("head", JSONArray(f.head.map { it.toDouble() }))
-        o.put("headNow", scene.headPose()?.let { JSONArray(listOf(it.position.x, it.position.y, it.position.z, it.rotation.x, it.rotation.y, it.rotation.z, it.rotation.w).map { v -> v.toDouble() }) })
-        o.put("planes", JSONArray(scene.planeLines()))
-        File(dir, "$name.json").writeText(o.toString(1))
-        TraceLog.i("CMD cam saved ${dir.absolutePath}/$name.png status=${cam.status} points=${f.points.joinToString(",") { String.format(Locale.US, "%.3f", it) }} cam=${f.camMatrix.joinToString(",") { String.format(Locale.US, "%.1f", it) }}")
-    }
-
     private fun bounds() {
-        for (panel in listOf("lesson", "calib")) {
+        for (panel in listOf("lesson", "draw")) {
             val size = Probe.sizeOf(panel)
             for ((name, b) in Probe.controlsOf(panel)) TraceLog.i(String.format(Locale.US, "BOUNDS panel=%s name=%s cx=%.1f cy=%.1f w=%.1f h=%.1f panel_px=%s", panel, name, b.cx, b.cy, b.w, b.h, size))
         }
     }
 
     @Suppress("unused")
-    private fun p2(x: Float, z: Float) = P2(x, z)
+    private fun mm(x: Float, y: Float) = Mm(x, y)
 }

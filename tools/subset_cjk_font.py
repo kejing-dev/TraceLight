@@ -24,6 +24,8 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 STRING_FILES = [
     os.path.join(ROOT, "app", "src", "main", "res", "values", "strings.xml"),
     os.path.join(ROOT, "app", "src", "main", "res", "values-zh", "strings.xml"),
+    # lesson names and step texts are written in code
+    os.path.join(ROOT, "app", "src", "main", "java", "io", "embodit", "tracelight", "domain", "Lessons.kt"),
 ]
 # CJK punctuation and the symbols the UI draws next to readings (grade glyphs, warnings, arrows).
 EXTRA = (
@@ -130,7 +132,9 @@ def used_characters():
     for path in STRING_FILES:
         text = open(path, encoding="utf-8").read()
         text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
-        for value in re.findall(r">([^<]*)<", text):
+        # strings.xml: the element texts; Kotlin: every string literal
+        values = re.findall(r'"([^"\n]*)"', text) if path.endswith(".kt") else re.findall(r">([^<]*)<", text)
+        for value in values:
             chars.update(ch for ch in value if ord(ch) > 0x7F)
     chars.discard("\n")
     return chars

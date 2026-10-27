@@ -34,8 +34,6 @@ androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lif
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
-spatial-ml-securemr = { group = "com.pico.spatial.ml", name = "securemr" }
-spatial-ml-readback = { group = "com.pico.spatial.ml", name = "readback" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

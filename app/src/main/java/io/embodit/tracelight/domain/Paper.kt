@@ -129,34 +129,6 @@ object PaperFit {
     fun draftFromMm(pose: PaperPose, mm: List<Mm>): CornerDraft = CornerDraft(mm.map { P2.of(pose.toWorld(it)) }, pose.center.y, List(4) { true })
 }
 
-/**
- * Calibration page (design S20 / `preconditions.deviceSpike.build.sheet`): five crosses at the printed
- * targets, and the 5-minute tracing test figure on the upper half.
- */
-object Calibration {
-    val targets: List<Mm> = listOf(Mm(0f, 0f), Mm(-80f, -120f), Mm(80f, -120f), Mm(80f, 120f), Mm(-80f, 120f))
-    const val ARM_MM = 12f
-    const val LINE_MM = 0.6f
-
-    /** Upper-half test figure: a 100 mm circle and an 80 mm square, concentric at the upper half's centre. */
-    val testCenter = Mm(0f, 74.25f)
-
-    fun testCircle(segments: Int = 96): List<Mm> = (0..segments).map { i -> val a = 2 * PI * i / segments; Mm(testCenter.x + 50f * cos(a).toFloat(), testCenter.y + 50f * sin(a).toFloat()) }
-
-    fun testSquare(): List<Mm> = listOf(Mm(-40f, -40f), Mm(40f, -40f), Mm(40f, 40f), Mm(-40f, 40f), Mm(-40f, -40f)).map { Mm(testCenter.x + it.x, testCenter.y + it.y) }
-
-    /** The five targets on a sheet of any size: the centre and 25 / 28.5 mm in from the corners (A4: (+-80, +-120)). */
-    fun targetsFor(wMm: Float, hMm: Float): List<Mm> {
-        val x = wMm / 2f - 25f
-        val y = hMm / 2f - 28.5f
-        return listOf(Mm(0f, 0f), Mm(-x, -y), Mm(x, -y), Mm(x, y), Mm(-x, y))
-    }
-
-    fun crosses(wMm: Float, hMm: Float): List<List<Mm>> = targetsFor(wMm, hMm).flatMap { t -> listOf(listOf(Mm(t.x - ARM_MM, t.y), Mm(t.x + ARM_MM, t.y)), listOf(Mm(t.x, t.y - ARM_MM), Mm(t.x, t.y + ARM_MM))) }
-
-    fun crosses(): List<List<Mm>> = targets.flatMap { t -> listOf(listOf(Mm(t.x - ARM_MM, t.y), Mm(t.x + ARM_MM, t.y)), listOf(Mm(t.x, t.y - ARM_MM), Mm(t.x, t.y + ARM_MM))) }
-}
-
 /** Smallest absolute difference of two headings (radians). */
 fun angleBetween(a: Float, b: Float): Float = abs(wrapAngle(a - b))
 
@@ -192,4 +164,52 @@ object Stick {
         val k = (a - DEAD) / (1f - DEAD)
         return MAX_DEG_S * k * k * if (x < 0) -1f else 1f
     }
+}
+
+/** A sheet of any size on the desk: centre, heading of its long side's "away" direction, width and height (metres). */
+data class SheetRect(val pose: PaperPose, val widthM: Float, val heightM: Float) {
+    val corners: List<P2>
+        get() {
+            val w = widthM * 500f
+            val h = heightM * 500f
+            return listOf(Mm(-w, -h), Mm(w, -h), Mm(w, h), Mm(-w, h)).map { P2.of(pose.toWorld(it)) }
+        }
+
+    companion object {
+        /**
+         * The rectangle that fits four desk points (any order): sides from the averaged opposite edges, the
+         * side pointing most away from [viewer] becomes the sheet's "up". Corners come back as ① near left,
+         * ② near right, ③ far right, ④ far left.
+         */
+        fun fit(points: List<P2>, y: Float, viewer: P2): SheetRect? {
+            if (points.size != 4) return null
+            // order around the centroid
+            val c = P2(points.sumOf { it.x.toDouble() }.toFloat() / 4f, points.sumOf { it.z.toDouble() }.toFloat() / 4f)
+            val ordered = points.sortedBy { atan2((it.z - c.z).toDouble(), (it.x - c.x).toDouble()) }
+            val e0 = ordered[1] - ordered[0]
+            val e1 = ordered[2] - ordered[1]
+            val e2 = ordered[3] - ordered[2]
+            val e3 = ordered[0] - ordered[3]
+            // two side directions, opposite edges averaged (flip the second of each pair)
+            val a = (e0 + e2 * -1f) * 0.5f
+            val b = (e1 + e3 * -1f) * 0.5f
+            val la = a.length
+            val lb = b.length
+            if (la < 0.02f || lb < 0.02f) return null
+            val toward = (c - viewer).normalized()
+            // "away" = whichever side direction is closer to the line of sight
+            val (awayDir, awayLen, sideLen) = if (abs(a.normalized().dot(toward)) >= abs(b.normalized().dot(toward))) Triple(a.normalized(), la, lb) else Triple(b.normalized(), lb, la)
+            val away = if (awayDir.dot(toward) >= 0f) awayDir else awayDir * -1f
+            return SheetRect(PaperPose(c.at(y), yawOf(away)), sideLen, awayLen)
+        }
+    }
+}
+
+/** Mean corner distance (metres) between two sheets; their order must match (both from [SheetRect.corners]). */
+fun sheetDistance(a: SheetRect, b: SheetRect): Float {
+    var s = 0f
+    val ca = a.corners
+    val cb = b.corners
+    for (i in 0 until 4) s += (ca[i] - cb[i]).length
+    return s / 4f
 }

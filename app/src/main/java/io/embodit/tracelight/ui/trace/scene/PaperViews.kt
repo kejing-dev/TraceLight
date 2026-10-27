@@ -62,11 +62,11 @@ internal class SheetMesh(parent: Entity, private val mesh: MeshResource, materia
 }
 
 /**
- * One corner handle (design `entities3d.cornerHandle`): a 14 mm ring with a cross in the sheet's axes,
- * lying on the desk; a 30 mm sphere collider makes it easy to pinch. Amber + breathing = the corner to
- * drag now, jade = placed, coral = the one that is off (S05), white = not yet.
+ * One corner handle (design `entities3d.cornerHandle`): an 18 mm ring with a cross in the sheet's axes,
+ * lying on the desk; a 48 mm sphere collider makes it easy to pinch. Amber + breathing = the corner to
+ * drag now, jade = placed, white = not yet. The frame's move handle (index 4) is the same, bigger.
  */
-internal class CornerHandle(parent: Entity, meshes: TraceMeshes, private val m: TraceMaterials, val index: Int) {
+internal class CornerHandle(parent: Entity, meshes: TraceMeshes, private val m: TraceMaterials, val index: Int, private val ringM: Float = RING_M, private val armM: Float = ARM_M, colliderR: Float = COLLIDER_R) {
     private val ring: Entity = ModelEntity(meshes.ring, m.white)
     private val armA = Strip(parent, meshes.band, m.white, "cornerArmA:$index")
     private val armB = Strip(parent, meshes.band, m.white, "cornerArmB:$index")
@@ -78,7 +78,7 @@ internal class CornerHandle(parent: Entity, meshes: TraceMeshes, private val m: 
         runCatching { ring.setName("cornerRing:$index") }
         parent.addChild(ring)
         runCatching { collider.setName("corner:$index") }
-        collider.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createSphere(COLLIDER_R)), physicsMaterial = PhysicsMaterialResource()))
+        collider.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createSphere(colliderR)), physicsMaterial = PhysicsMaterialResource()))
         collider.components.set(InteractableComponent())
         parent.addChild(collider)
         show(false)
@@ -90,7 +90,7 @@ internal class CornerHandle(parent: Entity, meshes: TraceMeshes, private val m: 
     fun draw(at: P2, y: Float, right: P2, away: P2, look: Look, nowMs: Long) {
         val p = at.at(y)
         val pulse = if (look == Look.ACTIVE) 1f + 0.18f * (0.5f + 0.5f * sin(nowMs / 1000f * 2f * Math.PI.toFloat() * 0.9f)) else 1f
-        ring.setLocal(position = p, scale = Vec3(RING_M * pulse, 1f, RING_M * pulse))
+        ring.setLocal(position = p, scale = Vec3(ringM * pulse, 1f, ringM * pulse))
         val mat =
             when (look) {
                 Look.ACTIVE -> m.amber
@@ -106,8 +106,8 @@ internal class CornerHandle(parent: Entity, meshes: TraceMeshes, private val m: 
         }
         val r = right.at(0f)
         val a = away.at(0f)
-        armA.draw(p - r * ARM_M, p + r * ARM_M, CROSS_W_M, Vec3.UP)
-        armB.draw(p - a * ARM_M, p + a * ARM_M, CROSS_W_M, Vec3.UP)
+        armA.draw(p - r * armM, p + r * armM, CROSS_W_M, Vec3.UP)
+        armB.draw(p - a * armM, p + a * armM, CROSS_W_M, Vec3.UP)
         collider.setLocal(position = p)
         show(true)
     }
@@ -126,10 +126,11 @@ internal class CornerHandle(parent: Entity, meshes: TraceMeshes, private val m: 
     enum class Look { ACTIVE, PLACED, OFF, IDLE }
 
     companion object {
-        const val RING_M = 0.014f
-        const val ARM_M = 0.009f
-        const val CROSS_W_M = 0.0004f
-        const val COLLIDER_R = 0.015f
+        // v0.2.0: bigger than the design's 14 mm / 30 mm: on the device most pinches missed the corners
+        const val RING_M = 0.018f
+        const val ARM_M = 0.012f
+        const val CROSS_W_M = 0.0007f
+        const val COLLIDER_R = 0.024f
     }
 }
 

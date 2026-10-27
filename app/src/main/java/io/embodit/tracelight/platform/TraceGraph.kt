@@ -4,7 +4,6 @@ import android.content.Context
 import io.embodit.tracelight.data.PrefsTraceStore
 import io.embodit.tracelight.data.TraceStore
 import io.embodit.tracelight.platform.anchor.WorldAnchorGateway
-import io.embodit.tracelight.platform.camera.PaperCamera
 import io.embodit.tracelight.platform.sense.PlaneTracker
 import io.embodit.tracelight.platform.tracking.ControllerInput
 import io.embodit.tracelight.platform.tracking.HeadTracker
@@ -18,10 +17,6 @@ object TraceGraph {
     val planes = PlaneTracker()
     val head = HeadTracker()
     val controller = ControllerInput()
-    val camera =
-        PaperCamera().apply {
-            headSource = { head.pose()?.let { floatArrayOf(it.position.x, it.position.y, it.position.z, it.rotation.x, it.rotation.y, it.rotation.z, it.rotation.w) } }
-        }
 
     @Volatile private var store: TraceStore? = null
 

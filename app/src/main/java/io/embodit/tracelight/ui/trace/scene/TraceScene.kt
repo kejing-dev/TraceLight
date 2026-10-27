@@ -19,12 +19,11 @@ import com.pico.spatial.ui.foundation.content.SpatialViewAttachments
 import com.pico.spatial.ui.foundation.gesture.SpatialDragValue
 import com.pico.spatial.ui.foundation.gesture.SpatialTapValue
 import com.pico.spatial.ui.geometry.Offset3D
-import io.embodit.tracelight.domain.Calibration
 import io.embodit.tracelight.domain.CornerDraft
 import io.embodit.tracelight.domain.Desks
 import io.embodit.tracelight.domain.DragLine
-import io.embodit.tracelight.domain.HeadPose
 import io.embodit.tracelight.domain.Hand
+import io.embodit.tracelight.domain.HeadPose
 import io.embodit.tracelight.domain.Mm
 import io.embodit.tracelight.domain.P2
 import io.embodit.tracelight.domain.PaperFit
@@ -69,19 +68,19 @@ class TraceFrameSystem : System() {
     }
 }
 
-/** Panel ids of the pool: the lesson panel (alignment flow) and, in its place, the calibration page. */
+/** Panel ids of the pool: the setup panel (aligning) and the drawing panel (library, tracing, free drawing). */
 object PanelIds {
     const val LESSON = "lesson"
-    const val CALIB = "calib"
+    const val DRAW = "draw"
 
-    val pool: List<String> = listOf(LESSON, CALIB)
+    val pool: List<String> = listOf(LESSON, DRAW)
 }
 
 /**
  * The 3D side of the app. It owns the calibrated stage root, the panel pool, the ghost frame, the
- * frame and its corner handles, the calibration crosses, starts and stops the sensing (planes, head,
- * controllers, world anchors) and turns system taps and drags into events. Per-frame work (ghost
- * frame, corner drags, thumbstick turn, panel placement, breathing) happens in [onFrame], never
+ * frame with its corner and move handles, the drawing on the sheet, starts and stops the sensing
+ * (planes, head, controllers, world anchors) and turns system taps and drags into events. Per-frame
+ * work (ghost frame, drags, thumbstick turn, pen tip, panel placement) happens in [onFrame], never
  * through Compose: the only Compose state written here is which panel is in view. Main thread only.
  */
 class TraceScene(private val sink: (TraceEvent) -> Unit) {
@@ -115,13 +114,9 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
     private var ghost: Outline? = null
     private var ghostX: List<Strip> = emptyList()
     private var frame: Outline? = null
-    private var divider: Strip? = null
-    private var offsetLine: Strip? = null
     private val corners = ArrayList<CornerHandle>()
-    private var crosses: SheetMesh? = null
-    private var crossesSize: Pair<Float, Float>? = null
-    private var testFigure: SheetMesh? = null
-    private var finder: PaperFinder? = null
+    private var mover: CornerHandle? = null
+    private var guides: GuideViews? = null
 
     private var pose = HeadPose(Vec3.ZERO, Quat4.IDENTITY)
     private var hasHead = false
@@ -139,9 +134,9 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
     private var lastGhostOnDesk = false
     private var lastGhostFrozen = false
 
-    // the panel on the desk (S03 on): placed once per state change, never chasing the ghost
+    // panels beside the sheet: placed once per sheet, never chasing the ghost
     private var deskPanelAt: Vec3? = null
-    private var deskPanelFor: String? = null
+    private var deskPanelFor: Any? = null
     private val lessonFollow = LazyFollow("lesson", ::lessonRest, windowDeg = 35f, nearM = 0.35f, farM = 0.9f)
 
     // aligned flash (S06): 0.6 s of lightbox warm white
@@ -156,7 +151,7 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
     private var anchorBindPose: Pair<Vec3, Quat4>? = null
     private var lastDriftLogMs = 0L
 
-    // ---- system drag of a corner
+    // ---- system drag of a corner (0..3) or of the whole frame (MOVE)
     private class Drag(val corner: Int, val press: Vec3, val offset: P2) {
         var begun = false
         var hand = Vec3.ZERO
@@ -164,8 +159,6 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         var totalPx = Vec3.ZERO
         var dir: Vec3? = null
         var equivalent = 1f
-        var gain = 0.5f
-        var y = 0f
         var moves = 0
         var lastLogMs = 0L
     }
@@ -176,10 +169,16 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
     /** The dragged corner's live point (written on release as TraceEvent.CornerMoved). */
     private var liveCorner: Pair<Int, P2>? = null
 
+    /** The whole frame's live offset while its move handle is dragged (TraceEvent.FrameMoved on release). */
+    private var liveMove: P2? = null
+
     /** Thumbstick turn of the whole frame, live here and written on release (TraceEvent.FrameTurned). */
     private var turnYaw = 0f
     private var turning = false
     private var neutralSinceMs = -1L
+
+    /** Set by the screen before [attach]. */
+    var appContext: android.content.Context? = null
 
     // =========================================================================================
     // lifecycle
@@ -189,12 +188,7 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         if (attached || stageRoot != null) detach()
         val t0 = SystemClock.elapsedRealtime()
         this.content = content
-        val sceneScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-        scope = sceneScope
-        finder =
-            PaperFinder(TraceGraph.camera, sceneScope, ::desks) { rect, stable -> sink(TraceEvent.PaperSeen(rect, stable)) }.also { f ->
-                if (io.embodit.tracelight.ui.trace.debug.Probe.enabled) f.saveFramesTo = appContext?.getExternalFilesDir(null)?.let { java.io.File(it, "cam") }
-            }
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val root = Entity()
         runCatching { root.setName("stageRoot") }
         content.addEntity(root)
@@ -220,7 +214,7 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         val rig = PanelRig(root) { id, shown -> panelShown[id] = shown }
         this.rig = rig
         rig.world(PanelIds.LESSON, PanelSizes.LESSON_W, PanelSizes.LESSON_H, PANEL_SCALE)
-        rig.world(PanelIds.CALIB, PanelSizes.CALIB_W, PanelSizes.CALIB_H, PANEL_SCALE)
+        rig.world(PanelIds.DRAW, PanelSizes.DRAW_W, PanelSizes.DRAW_H, PANEL_SCALE)
         head.start()
         controller.start()
         TraceGraph.anchors.start()
@@ -242,11 +236,10 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
 
     /**
      * Materials and meshes, then the sheet's entities. A mesh costs about a rendered frame and blocking
-     * the main thread for all of them raised an ANR in Spatial Ruler: the build yields after every step (S00).
+     * the main thread for all of them raised an ANR (first launch: "Waited 5000ms for FocusEvent"):
+     * the build starts late and pauses after every step (S00).
      */
     private suspend fun build(node: Entity, t0: Long) {
-        // let the Stage take focus before the first mesh: a mesh waits for a rendered frame and the
-        // emulator idles near 1 fps (first launch ANR: "Waited 5000ms for FocusEvent", MeshResource.load)
         delay(BUILD_START_MS)
         val shared = SharedResources()
         this.shared = shared
@@ -265,16 +258,11 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         ghost = Outline(node, meshes.dashes, m.ghost, "ghost")
         ghostX = List(2) { Strip(node, meshes.band, m.coral, "ghostX:$it") }
         frame = Outline(node, meshes.band, m.amber, "frame")
-        divider = Strip(node, meshes.dashes, m.divider, "divider")
-        offsetLine = Strip(node, meshes.band, m.coral, "offset")
         delay(BUILD_STEP_MS)
         repeat(4) { corners += CornerHandle(node, meshes, m, it) }
+        mover = CornerHandle(node, meshes, m, MOVE, ringM = 0.026f, armM = 0.02f, colliderR = 0.03f)
         delay(BUILD_STEP_MS)
-        MeshFactory.polylines("crosses", Calibration.crosses().map { l -> l.map { it.local() } }, Calibration.LINE_MM / 1000f)?.let { crosses = SheetMesh(node, it, m.traceBlue, "crosses") }
-        crossesSize = 0.210f to 0.297f
-        delay(BUILD_STEP_MS)
-        MeshFactory.polylines("testFigure", listOf(Calibration.testCircle().map { it.local() }, Calibration.testSquare().map { it.local() }), GUIDE_W_M)?.let { testFigure = SheetMesh(node, shared.keep(it), m.traceBlue, "testFigure") }
-        delay(BUILD_STEP_MS)
+        guides = scope?.let { GuideViews(node, meshes, m, it) }
         built = true
         TraceLog.i("SCENE built ms=${SystemClock.elapsedRealtime() - t0}")
         render(ui)
@@ -283,26 +271,7 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
 
     private fun startSensing() {
         planes.start { colliders?.sync(planes.all) }
-        startCameraWhenAllowed()
     }
-
-    /** The camera needs CAMERA and SPATIAL_DATA (readback); checked again every 2 s until both are granted. */
-    private fun startCameraWhenAllowed() {
-        val ctx = appContext ?: return
-        val ok = listOf(android.Manifest.permission.CAMERA, "com.picovr.permission.SPATIAL_DATA").all { ctx.checkSelfPermission(it) == android.content.pm.PackageManager.PERMISSION_GRANTED }
-        if (ok) {
-            TraceGraph.camera.start(ctx)
-            return
-        }
-        if (!cameraWaitLogged) TraceLog.w("CAM waiting for camera permission: automatic alignment off, manual frame works")
-        cameraWaitLogged = true
-        main.postDelayed({ if (attached && !paused) startCameraWhenAllowed() }, 2000L)
-    }
-
-    private var cameraWaitLogged = false
-
-    /** Set by the screen before [attach]: the camera needs a context. */
-    var appContext: android.content.Context? = null
 
     /** The Stage went to the background: stop every tracker (design `container.lifecycle`). */
     fun pause() {
@@ -311,7 +280,6 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         planes.stop()
         head.stop()
         controller.stop()
-        TraceGraph.camera.stop()
         endDrag(cancelled = true)
         turning = false
         TraceLog.i("SCENE paused")
@@ -342,24 +310,20 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         if (ActiveScene.scene === this) ActiveScene.scene = null
         main.removeCallbacksAndMessages(null)
         buildJob?.cancel()
+        runCatching { guides?.release() }
+        guides = null
         scope?.cancel()
         scope = null
         planes.stop()
         head.stop()
         controller.stop()
-        TraceGraph.camera.stop()
         TraceGraph.anchors.stop()
         panelShown.clear()
         corners.clear()
-        crosses = null
-        crossesSize = null
-        testFigure = null
-        finder = null
+        mover = null
         ghost = null
         ghostX = emptyList()
         frame = null
-        divider = null
-        offsetLine = null
         runCatching { colliders?.clear() }
         colliders = null
         runCatching { rig?.release() }
@@ -382,6 +346,7 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         hasHead = false
         drag = null
         liveCorner = null
+        liveMove = null
         turning = false
         lessonFollow.reset()
         deskPanelAt = null
@@ -405,15 +370,15 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
                 turning = false
             }
         }
-        if (state.draft != before.draft) liveCorner = null
-        if (state.anchorId != anchorId) bindAnchor(state.anchorId)
-        val calib = state.designState == "S20"
-        if (calib) {
-            rig[PanelIds.LESSON]?.hide()
-        } else {
-            rig[PanelIds.CALIB]?.hide()
+        if (state.draft != before.draft) {
+            liveCorner = null
+            liveMove = null
         }
+        if (state.anchorId != anchorId) bindAnchor(state.anchorId)
+        if (isDrawPanel(state.designState)) rig[PanelIds.LESSON]?.hide() else rig[PanelIds.DRAW]?.hide()
     }
+
+    private fun isDrawPanel(id: String) = id in DRAW_STATES
 
     // =========================================================================================
     // per frame
@@ -435,9 +400,7 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         pollTracking(now)
         if (built) {
             pollDesk()
-            finder?.step(active = (ui.designState == "S03" || ui.designState == "S20") && hasHead, now = now)
-            dumpFirstFrame()
-            pollController(now)
+            pollController()
             stepStick(now)
             drawGhost()
             drawSheet(now)
@@ -472,6 +435,15 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         }
     }
 
+    /**
+     * The desk under a point: TABLE planes first, then the lowest other desk plane that contains it (on
+     * the device a keyboard 3 - 4 cm above the desk counted as a desk plane and frames landed on it).
+     */
+    private fun deskUnder(p: Vec3): PlaneSurface? {
+        val under = desks().filter { it.contains(Vec3(p.x, it.centroid.y, p.z)) }
+        return under.firstOrNull { it.semantic == "TABLE" } ?: under.minByOrNull { it.centroid.y }
+    }
+
     /** S03: the ghost frame slides with the head ray on the desk; it holds still while the gaze rests on the panel. */
     private fun drawGhost() {
         val g = ghost ?: return
@@ -485,18 +457,13 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         if (!frozen) {
             val hit = raycast(desks(), pose.position, pose.forward, 3f)
             if (hit != null) {
-                ghostPose = PaperPose(hit.point, yawOf(pose.level()))
-                ghostPlane = hit.plane
+                val desk = deskUnder(hit.point) ?: hit.plane
+                ghostPose = PaperPose(Vec3(hit.point.x, desk.centroid.y, hit.point.z), yawOf(pose.level()))
+                ghostPlane = desk
             } else {
                 ghostPose = null
                 ghostPlane = null
             }
-        }
-        if (ui.found != null) {
-            // the camera sees the sheet: its outline replaces the ghost (drawSheet)
-            g.hide()
-            ghostX.forEach { it.hide() }
-            return
         }
         val gp = ghostPose
         val onDesk = gp != null
@@ -506,7 +473,7 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
             sink(TraceEvent.GhostChanged(onDesk, frozen))
         }
         if (gp != null) {
-            g.draw(CornerDraft.of(gp).points, gp.center.y + LIFT_M, GHOST_W_M)
+            g.draw(SheetRect(gp, ghostW(), ghostH()).corners, gp.center.y + LIFT_M, GHOST_W_M)
             ghostX.forEach { it.hide() }
         } else {
             g.hide()
@@ -520,7 +487,12 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         }
     }
 
-    /** True when the head ray passes through the lesson panel (design S03: the ghost freezes). */
+    /** A re-alignment drops a frame of the last sheet's size; the first one is A4. */
+    private fun ghostW() = if (ui.previous != null) ui.sheetW else Sheet.A4.w / 1000f
+
+    private fun ghostH() = if (ui.previous != null) ui.sheetH else Sheet.A4.h / 1000f
+
+    /** True when the head ray passes through the setup panel (S03: the ghost freezes). */
     private fun gazeOnPanel(): Boolean {
         val slot = rig?.get(PanelIds.LESSON) ?: return false
         if (!slot.shown) return false
@@ -532,10 +504,11 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         return ang < halfW * 0.9
     }
 
-    /** The corner points as drawn now: the dragged one live, all of them turned while the stick is held. */
+    /** The corner points as drawn now: the dragged corner live, the whole frame moved or turned live. */
     private fun liveDraft(): CornerDraft? {
         var d = ui.draft ?: return null
         liveCorner?.let { (i, p) -> d = d.with(i, p).copy(moved = d.moved) }
+        liveMove?.let { by -> d = d.copy(points = d.points.map { it + by }) }
         if (turning && turnYaw != 0f) d = d.turned(turnYaw)
         return d
     }
@@ -543,100 +516,52 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
     private fun drawSheet(now: Long) {
         val m = materials ?: return
         val f = frame ?: return
-        val div = divider ?: return
-        val off = offsetLine ?: return
-        val lift = LIFT_M + ui.calib.heightMm / 1000f
+        val g = guides
+        val lift = LIFT_M
         val draft = if (ui.aligning) liveDraft() else null
         val aligned = ui.aligned
         when {
             draft != null -> {
                 f.material(m.amber)
                 f.draw(draft.points, draft.y + lift, FRAME_W_M)
-                div.hide()
                 val fit = PaperFit.fit(draft, Sheet.A4)
-                val worst = if (ui.designState == "S05") ui.verdict?.a4?.worst else null
                 for (c in corners) {
                     val look =
                         when {
-                            worst == c.index -> CornerHandle.Look.OFF
-                            c.index == ui.activeCorner -> CornerHandle.Look.ACTIVE
-                            ui.recheck && c.index < ui.confirmed -> CornerHandle.Look.PLACED
-                            !ui.recheck && draft.moved[c.index] -> CornerHandle.Look.PLACED
+                            c.index == ui.activeCorner && !ui.allCornersSet -> CornerHandle.Look.ACTIVE
+                            draft.moved[c.index] -> CornerHandle.Look.PLACED
                             else -> CornerHandle.Look.IDLE
                         }
                     c.draw(draft.points[c.index], draft.y + lift + 0.0002f, fit.pose.right, fit.pose.away, look, now)
                 }
-                if (worst != null) {
-                    val target = P2.of(fit.pose.toWorld(Sheet.A4.corners[worst]))
-                    off.draw(draft.points[worst].at(draft.y + lift), target.at(draft.y + lift), OFFSET_W_M, Vec3.UP)
-                } else off.hide()
-                crosses?.show(false)
-                testFigure?.show(false)
+                mover?.draw(draft.centroid, draft.y + lift + 0.0002f, fit.pose.right, fit.pose.away, CornerHandle.Look.IDLE, now)
+                g?.draw(null, 0, null, 0f, 0f, GuideViews.Mode.HIDDEN, lift, now)
+                g?.drawGrid(false, null, 0f, 0f, lift)
             }
             aligned != null -> {
                 corners.forEach { it.show(false) }
-                off.hide()
+                mover?.show(false)
                 val flashing = flashStartMs > 0 && now - flashStartMs < FLASH_MS
                 f.material(if (flashing) m.warm else m.faint)
-                val rect = SheetRect(aligned, ui.sheetW, ui.sheetH)
-                f.draw(rect.corners, aligned.center.y + lift, FRAME_W_M)
-                val halfMm = ui.sheetW * 500f
-                div.draw(aligned.toWorld(Mm(-halfMm, 0f), lift), aligned.toWorld(Mm(halfMm, 0f), lift), DIVIDER_W_M, Vec3.UP)
-                val calib = ui.designState == "S20" && !ui.trackingLost
-                if (calib) ensureCrosses(ui.sheetW, ui.sheetH)?.place(aligned, lift + 0.0001f) else crosses?.show(false)
-                if (calib && ui.calib.testFigure) testFigure?.place(aligned, lift + 0.0001f) else testFigure?.show(false)
-            }
-            ui.designState == "S03" && ui.found != null -> {
-                // the sheet the camera sees (automatic alignment): amber while it settles, jade once stable
-                val r = ui.found!!
-                f.material(if (ui.foundStable) m.jade else m.amber)
-                f.draw(r.corners, r.pose.center.y + lift, FOUND_W_M)
-                div.hide()
-                off.hide()
-                corners.forEach { it.show(false) }
-                crosses?.show(false)
-                testFigure?.show(false)
+                f.draw(SheetRect(aligned, ui.sheetW, ui.sheetH).corners, aligned.center.y + lift, FRAME_W_M)
+                val mode =
+                    when {
+                        ui.trackingLost -> GuideViews.Mode.HIDDEN
+                        ui.designState == "S09" -> GuideViews.Mode.TRACE
+                        ui.designState == "S12" -> GuideViews.Mode.DONE
+                        else -> GuideViews.Mode.HIDDEN
+                    }
+                g?.draw(ui.piece, ui.step, aligned, ui.sheetW, ui.sheetH, mode, lift + 0.0002f, now)
+                g?.drawGrid(ui.designState == "S14" && ui.grid && !ui.trackingLost, aligned, ui.sheetW, ui.sheetH, lift + 0.0001f)
             }
             else -> {
                 f.hide()
-                div.hide()
-                off.hide()
                 corners.forEach { it.show(false) }
-                crosses?.show(false)
-                testFigure?.show(false)
+                mover?.show(false)
+                g?.draw(null, 0, null, 0f, 0f, GuideViews.Mode.HIDDEN, lift, now)
+                g?.drawGrid(false, null, 0f, 0f, lift)
             }
         }
-    }
-
-    private var rawDumped = false
-
-    /** Debug builds: the first camera frame's raw bytes, for checking the readback layout on a new device. */
-    private fun dumpFirstFrame() {
-        if (rawDumped || !io.embodit.tracelight.ui.trace.debug.Probe.enabled) return
-        val f = TraceGraph.camera.latest ?: return
-        rawDumped = true
-        val dir = appContext?.getExternalFilesDir(null)?.let { java.io.File(it, "cam") } ?: return
-        scope?.launch(Dispatchers.IO) {
-            runCatching {
-                dir.mkdirs()
-                java.io.File(dir, "first.bin").writeBytes(f.rgba)
-                TraceLog.i("CAM first frame bytes=${f.rgba.size} w=${f.width} h=${f.height} k=${f.camMatrix.joinToString(",")}")
-            }.onFailure { TraceLog.w("CAM first dump failed: $it") }
-        }
-    }
-
-    /** Calibration crosses for a sheet of [w] x [h] metres (rebuilt when the size changes). */
-    private fun ensureCrosses(w: Float, h: Float): SheetMesh? {
-        val size = w to h
-        if (crossesSize == size && crosses != null) return crosses
-        val shared = shared ?: return crosses
-        val m = materials ?: return crosses
-        val node = sheetNode ?: return crosses
-        crosses?.let { old -> old.show(false); runCatching { old.destroy() } }
-        crosses = MeshFactory.polylines("crosses", Calibration.crosses(w * 1000f, h * 1000f).map { l -> l.map { it.local() } }, Calibration.LINE_MM / 1000f)?.let { SheetMesh(node, it, m.traceBlue, "crosses") }
-        crossesSize = size
-        TraceLog.i(String.format(Locale.US, "CROSSES for %.0fx%.0f mm", w * 1000f, h * 1000f))
-        return crosses
     }
 
     // =========================================================================================
@@ -653,7 +578,6 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         val root = stageRoot ?: return
         val node = sheetNode ?: return
         if (id == anchorId) return
-        // back to Stage space first
         runCatching { node.setParent(root) }
         node.setLocal(position = Vec3.ZERO, rotation = Quat4.IDENTITY)
         runCatching { anchorEntity?.destroy(true) }
@@ -710,16 +634,12 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         if (now - lastDriftLogMs >= DRIFT_LOG_MS) {
             lastDriftLogMs = now
             val (p0, _) = anchorBindPose ?: return
-            val moved = p.distanceTo(p0) * 1000f
-            // where the sheet's centre is drawn now vs at alignment (both Stage space)
-            val c = ui.aligned?.center
-            val drawn = c?.let { runCatching { node.convertPositionTo(it.sdk(), stageRoot).domain() }.getOrNull() }
-            TraceLog.i(String.format(Locale.US, "DRIFT anchor_moved_mm=%.1f center_drawn=%s center_aligned=%s head=%s", moved, TraceLog.pos(drawn), TraceLog.pos(c), TraceLog.pos(pose.position)))
+            TraceLog.i(String.format(Locale.US, "DRIFT anchor_moved_mm=%.1f head=%s", p.distanceTo(p0) * 1000f, TraceLog.pos(pose.position)))
         }
     }
 
     // =========================================================================================
-    // thumbstick turn + controller tip
+    // thumbstick turn + controller
     // =========================================================================================
 
     /**
@@ -760,34 +680,21 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         return String.format(Locale.US, "stick x=%.2f ms=%d aligning=%s", x, ms, ui.aligning)
     }
 
-    /**
-     * Design T4: with a controller, a trigger press while its tracked point is within 3 cm of the desk
-     * and 30 cm of the sheet puts the current corner right below it. The tip offset of the controller
-     * model is unconfirmed: the raw pose is logged with every press (`TIP`).
-     */
-    private fun pollController(now: Long) {
+    private fun pollController() {
         val (l, r) = controller.poses()
         val tracked = l != null || r != null
         if (tracked != lastController) {
             lastController = tracked
             sink(TraceEvent.ControllerChanged(tracked))
         }
-        val (pl, pr) = controller.takePresses()
-        if (!pl && !pr) return
-        val p = (if (pr) r else null) ?: (if (pl) l else null) ?: return
-        val d = ui.draft
-        TraceLog.i("TIP press hand=${if (pr) "right" else "left"} pos=${TraceLog.pos(p.position)} ${TraceLog.quat(p.rotation)} state=${ui.designState}")
-        if (!ui.dragEnabled || d == null) return
-        if (abs(p.position.y - d.y) > TIP_DESK_M) return
-        if (P2.of(p.position).minus(d.centroid).length > TIP_SHEET_M) return
-        sink(TraceEvent.CornerMoved(ui.activeCorner, P2.of(p.position)))
+        controller.takePresses()
     }
 
     // =========================================================================================
-    // panels on the desk
+    // panels beside the sheet
     // =========================================================================================
 
-    /** S00 - S02 (design `spatialLayout.panel`): 0.60 m from the eyes, yaw only, 12 degrees below the level gaze. */
+    /** S00 - S02: 0.60 m from the eyes, yaw only, 12 degrees below the level gaze. */
     private fun lessonRest(h: HeadPose): Vec3 = restAt(h, 0f, -LESSON_DOWN_DEG, LESSON_M)
 
     private fun restAt(h: HeadPose, leftDeg: Float, upDeg: Float, dist: Float): Vec3 {
@@ -799,34 +706,38 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         return h.position + d.at(0f) * (dist * cos(u)) + Vec3(0f, dist * sin(u), 0f)
     }
 
-    private fun panelLift(): Float = PANEL_BASE_M + PanelSizes.LESSON_H * DP_M * PANEL_SCALE / 2f
-
-    /** Where the panel stands for a sheet (paper (-220, +200) mm, mirrored for the left hand; 30 mm above the desk). */
-    private fun besideSheet(p: PaperPose): Vec3 {
+    /**
+     * Beside the sheet, on the side away from the drawing hand, standing on the desk a little toward
+     * its far edge: within reach of the eyes from the chair (gaze + pinch, no walking), never over the paper.
+     */
+    private fun besideSheet(p: PaperPose, wM: Float, panelId: String): Vec3 {
+        val (wDp, hDp) = if (panelId == PanelIds.DRAW) PanelSizes.DRAW_W to PanelSizes.DRAW_H else PanelSizes.LESSON_W to PanelSizes.LESSON_H
+        val halfW = wDp * DP_M * PANEL_SCALE / 2f
         val side = if (ui.settings.hand == Hand.LEFT) 1f else -1f
-        return p.toWorld(Mm(side * PANEL_SIDE_MM, PANEL_AWAY_MM), panelLift())
+        val x = side * (wM * 1000f / 2f + halfW * 1000f + PANEL_GAP_MM)
+        return p.toWorld(Mm(x, PANEL_AWAY_MM), PANEL_BASE_M + hDp * DP_M * PANEL_SCALE / 2f)
     }
 
     private fun placePanels(now: Long) {
         val rig = rig ?: return
-        val calib = ui.designState == "S20"
-        val slot = rig[if (calib) PanelIds.CALIB else PanelIds.LESSON] ?: return
         val state = ui.designState
+        val panelId = if (isDrawPanel(state)) PanelIds.DRAW else PanelIds.LESSON
+        val slot = rig[panelId] ?: return
         val draft = ui.draft
         val aligned = ui.aligned
         val at: Vec3? =
             when {
-                state in setOf("S00", "S01", "S02", "S16", "S18") -> {
+                state in setOf("S00", "S01", "S02", "S16") -> {
                     deskPanelFor = null
                     lessonFollow.step(pose, now, hold = false)?.let { slot.show(it) } ?: slot.show()
                     return
                 }
                 state == "S03" -> {
-                    // placed once on entering S03 at the first desk hit, never chasing the ghost (R2-3)
+                    // placed once on entering S03 at the first desk hit, never chasing the ghost
                     if (deskPanelFor != "S03") {
                         val gp = ghostPose ?: raycast(desks(), pose.position, pose.forward, 3f)?.let { PaperPose(it.point, yawOf(pose.level())) }
                         if (gp != null) {
-                            deskPanelAt = besideSheet(gp)
+                            deskPanelAt = besideSheet(gp, ghostW(), panelId)
                             deskPanelFor = "S03"
                             TraceLog.i("PANEL desk at=${TraceLog.pos(deskPanelAt)}")
                         }
@@ -834,18 +745,18 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
                     deskPanelAt
                 }
                 draft != null -> {
-                    val key = "draft"
-                    if (deskPanelFor != key) {
-                        deskPanelAt = besideSheet(PaperFit.fit(draft, Sheet.A4).pose)
-                        deskPanelFor = key
+                    if (deskPanelFor !is CornerDraft) {
+                        deskPanelAt = besideSheet(PaperFit.fit(draft, Sheet.A4).pose, Sheet.A4.w / 1000f, panelId)
+                        deskPanelFor = draft
                     }
                     deskPanelAt
                 }
                 aligned != null -> {
-                    val key = "aligned"
+                    val key = Triple(aligned, ui.sheetW, panelId)
                     if (deskPanelFor != key) {
-                        deskPanelAt = besideSheet(aligned)
+                        deskPanelAt = besideSheet(aligned, ui.sheetW, panelId)
                         deskPanelFor = key
+                        TraceLog.i("PANEL $panelId beside sheet at=${TraceLog.pos(deskPanelAt)}")
                     }
                     deskPanelAt
                 }
@@ -859,9 +770,10 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
     // input: system taps and drags
     // =========================================================================================
 
-    private fun cornerOf(entity: Entity?): Int? {
+    private fun handleOf(entity: Entity?): Int? {
         if (entity == null) return null
         for (c in corners) if (c.owns(entity)) return c.index
+        if (mover?.owns(entity) == true) return MOVE
         return null
     }
 
@@ -875,13 +787,14 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
             return
         }
         TraceLog.i("TAP target=$name stage=${TraceLog.pos(stage)} state=${ui.designState}")
+        if (ui.designState == "S09" && ui.menuOpen) return
         if (ui.designState != "S03") return
         // the pinch lands where the pointer hit a desk; else where the ghost is (head ray)
-        val onDesk = stage?.let { s -> desks().firstOrNull { abs(it.centroid.y - s.y) < 0.02f && it.contains(s) } }
+        val onDesk = stage?.let { s -> deskUnder(s)?.takeIf { abs(it.centroid.y - s.y) < 0.06f } }
         val drop =
             when {
                 onDesk != null && stage != null -> PaperPose(Vec3(stage.x, onDesk.centroid.y, stage.z), yawOf(pose.level()))
-                ghostPose != null -> ghostPose!!.let { it.copy(center = Vec3(it.center.x, ghostPlane?.centroid?.y ?: it.center.y, it.center.z)) }
+                ghostPose != null -> ghostPose
                 else -> null
             }
         if (drop == null) {
@@ -899,18 +812,16 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
                 val target = value.targetEntity
                 val name = runCatching { target?.getName() }.getOrNull() ?: "none"
                 val press = if (start != null) toStage(start.x, start.y, start.z) else null
-                val i = cornerOf(target)
-                TraceLog.i("DRAG start target=$name corner=${i?.plus(1) ?: "-"} stage=${TraceLog.pos(press)}")
+                val i = handleOf(target)
+                TraceLog.i("DRAG start target=$name handle=${i ?: "-"} stage=${TraceLog.pos(press)}")
                 if (i == null || press == null) return
                 val d = ui.draft ?: return
                 if (!ui.dragEnabled) {
                     TraceLog.i("DRAG refused state=${ui.designState}")
                     return
                 }
-                drag = Drag(i, press, P2.of(press) - d.points[i]).also {
-                    it.gain = ui.calib.gain
-                    it.y = d.y
-                }
+                val from = if (i == MOVE) d.centroid else d.points[i]
+                drag = Drag(i, Vec3(press.x, d.y, press.z), P2.of(press) - from)
             }
             "move" -> {
                 val d = drag ?: return
@@ -921,16 +832,17 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
                 if (!d.begun && d.hand.length >= DRAG_START_M) beginDrag(d)
                 if (d.begun) {
                     val dir = d.dir ?: return
-                    // gain 0.5 (design `corners.dragGain`): the hand moves 2 cm, the corner 1 cm
-                    val step = (d.hand - d.prevHand) * d.gain
+                    val step = (d.hand - d.prevHand) * DRAG_GAIN
                     val turned = DragLine.turn(dir, step, d.equivalent, pose.right, pose.up, pose.forward)
                     d.prevHand = d.hand
                     d.dir = turned
                     val hit = DragLine.onLevel(pose.position, turned, d.press.y) ?: return
-                    liveCorner = d.corner to (hit - d.offset)
+                    val at = hit - d.offset
+                    val draft = ui.draft ?: return
+                    if (d.corner == MOVE) liveMove = at - draft.centroid else liveCorner = d.corner to at
                     if (d.moves <= 3 || now - d.lastLogMs > 500) {
                         d.lastLogMs = now
-                        TraceLog.i("DRAG move corner=${d.corner + 1} live=${liveCorner?.second?.let { String.format(Locale.US, "(%.4f, %.4f)", it.x, it.z) }} n=${d.moves}")
+                        TraceLog.i(String.format(Locale.US, "DRAG move handle=%d at=(%.4f, %.4f) n=%d", d.corner, at.x, at.z, d.moves))
                     }
                 }
             }
@@ -942,7 +854,7 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
                     return
                 }
                 lastDragEndMs = now
-                TraceLog.i("DRAG $phase corner=${d.corner + 1} n=${d.moves}")
+                TraceLog.i("DRAG $phase handle=${d.corner} n=${d.moves}")
                 endDrag(cancelled = phase == "cancel")
             }
         }
@@ -956,18 +868,20 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         val pitch = Math.toDegrees(asin(pose.forward.y.coerceIn(-1f, 1f).toDouble())).toFloat()
         d.equivalent = DragLine.equivalentDepth(to.length, pitch)
         d.prevHand = d.hand
-        TraceLog.i("DRAG begin corner=${d.corner + 1} gain=${d.gain} depth=${String.format(Locale.US, "%.2f", d.equivalent)}")
+        TraceLog.i("DRAG begin handle=${d.corner} depth=${String.format(Locale.US, "%.2f", d.equivalent)}")
     }
 
     private fun endDrag(cancelled: Boolean) {
         val live = liveCorner
+        val move = liveMove
         drag = null
-        if (live == null) return
         if (cancelled) {
             liveCorner = null
+            liveMove = null
             return
         }
-        sink(TraceEvent.CornerMoved(live.first, live.second))
+        if (move != null) sink(TraceEvent.FrameMoved(move))
+        if (live != null) sink(TraceEvent.CornerMoved(live.first, live.second))
     }
 
     private fun handDelta(px: Vec3): Vec3? {
@@ -994,10 +908,7 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
     /** Debug: no desk counts (S16 on a room that has one). */
     var debugNoDesk = false
 
-    /**
-     * Debug `seed`: a sheet on the desk below the head, its top edge along the level gaze, centred
-     * [aheadM] ahead of the eyes (default 0.40 m) where the desk allows.
-     */
+    /** Debug `seed`: a sheet on the desk ahead of the head, its top edge along the level gaze. */
     fun debugSeed(aheadM: Float = 0.40f): PaperPose? {
         val f = pose.level()
         var c = P2.of(pose.position) + f * aheadM
@@ -1007,7 +918,7 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         return PaperPose(c.at(y), yawOf(f))
     }
 
-    /** Debug `drag`: corner [i] glides to [to] (Stage) as a drag release would leave it. */
+    /** Debug `drag`: corner [i] goes to [to] (Stage) as a drag release would leave it. */
     fun debugCorner(i: Int, to: P2) {
         sink(TraceEvent.CornerMoved(i, to))
     }
@@ -1026,15 +937,7 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
 
     fun sheetLines(): List<String> {
         val out = ArrayList<String>()
-        val node = sheetNode
-        out += "SHEET anchor=${anchorId?.take(8)} bound=$anchorBound entity=${anchorStagePose()?.let { "${TraceLog.pos(it.first)} ${TraceLog.quat(it.second)}" }} still=$anchorStill"
-        ui.aligned?.let { a ->
-            for ((k, mm) in (Calibration.targets).withIndex()) {
-                val w = a.toWorld(mm)
-                val drawn = runCatching { node?.convertPositionTo(w.sdk(), stageRoot)?.domain() }.getOrNull()
-                out += String.format(Locale.US, "CROSS %d mm=(%.0f, %.0f) stage=%s drawn=%s", k, mm.x, mm.y, TraceLog.pos(w), TraceLog.pos(drawn))
-            }
-        }
+        out += "SHEET anchor=${anchorId?.take(8)} bound=$anchorBound entity=${anchorStagePose()?.let { "${TraceLog.pos(it.first)} ${TraceLog.quat(it.second)}" }} size=${ui.sheetW}x${ui.sheetH}"
         liveDraft()?.let { d -> d.points.forEachIndexed { i, p -> out += String.format(Locale.US, "CORNER %d at=(%.4f, %.4f) y=%.4f moved=%s", i + 1, p.x, p.z, d.y, d.moved[i]) } }
         return out
     }
@@ -1050,34 +953,32 @@ class TraceScene(private val sink: (TraceEvent) -> Unit) {
         const val BUILD_STEP_MS = 150L
         const val LESSON_M = 0.60f
         const val LESSON_DOWN_DEG = 12f
-        const val PANEL_SIDE_MM = 220f
-        const val PANEL_AWAY_MM = 200f
+        const val PANEL_GAP_MM = 40f
+        const val PANEL_AWAY_MM = 60f
         const val PANEL_BASE_M = 0.03f
         const val LIFT_M = 0.0005f
         const val FRAME_W_M = 0.001f
         const val GHOST_W_M = 0.0015f
-        const val DIVIDER_W_M = 0.0006f
-        const val OFFSET_W_M = 0.0006f
-        const val GUIDE_W_M = 0.0008f
-        const val FOUND_W_M = 0.0015f
         const val X_HALF_M = 0.012f
         const val X_W_M = 0.002f
         const val FLASH_MS = 600L
         const val DRAG_START_M = 0.005f
+        /** The hand moves 10 cm, the corner 8 cm (design 0.5 felt sluggish on the device). */
+        const val DRAG_GAIN = 0.8f
         const val TAP_AFTER_DRAG_MS = 300L
         const val LOG_MS = 5_000L
         const val DRIFT_LOG_MS = 5_000L
         const val ANCHOR_STILL_FRAMES = 5
         const val STICK_RELEASE_MS = 150L
-        const val TIP_DESK_M = 0.03f
-        const val TIP_SHEET_M = 0.30f
+        const val MOVE = 4
+        val DRAW_STATES = setOf("S07", "S09", "S12", "S14")
     }
 }
 
 /**
  * Lazy follow (Spatial Ruler T11): the panel rests where it is; once its centre has been more than
- * [windowDeg] off the view direction, or nearer than [nearM] or farther than [farM], for 0.5 s, it
- * slides (0.35 s, ease-in-out cubic) to the rest pose of that moment.
+ * [windowDeg] off the view direction, or nearer than [nearM] or farther than [farM], for 0.4 s, it
+ * slides (0.4 s, ease-in-out cubic) to the rest pose of that moment.
  */
 internal class LazyFollow(private val name: String, private val rest: (HeadPose) -> Vec3, private val windowDeg: Float, private val nearM: Float, private val farM: Float) {
     private var at: Vec3? = null
@@ -1112,7 +1013,7 @@ internal class LazyFollow(private val name: String, private val rest: (HeadPose)
             }
             return write(p)
         }
-        // yaw only (design S00 - S02): the angle is measured in the horizontal plane
+        // yaw only: the angle is measured in the horizontal plane
         val toPanel = current - head.position
         val dist = toPanel.length
         val flat = P2.of(toPanel).normalized()
