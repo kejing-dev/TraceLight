@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- lightbox paper cream: the app's own icon colour in the launcher (light, unlike every other factory app) -->
+    <color name="ic_launcher_background">#FFF2E6CC</color>
+</resources>

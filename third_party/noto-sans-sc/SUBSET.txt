@@ -1,0 +1,6 @@
+Noto Sans SC (variable), subset for Spatial Ruler. A Modified Version under the SIL OFL 1.1.
+source: NotoSansSC-VF.ttf  Version 2.04;241114210130;non-release
+axes kept: [('wght', 100.0, 100.0, 900.0)]
+glyphs: 254  characters: 183
+characters: °±·×÷—‘’“”…‰′″№←↑→↓↔↕■□▲△◆○◌●✓　、。〈〉《》「」『』【】一七万三上下不丢两个中九了二五人件位住体保允全八六具准出删别到力动十千厘去取可右后周和四回圈在地墙备外多失存定实家宽寸尺左已平得慢房找拖按挡摆摇撞撤放文无更最杆格框次毫没法消深清点环用百的看知确空米系线统置能英观许设识试请跟转边过这退道部里重销锚门间除随零面顾高！（），：；？｜～
+not in the source font (left to the system fallback): U+270B U+29B8

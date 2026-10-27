@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- No network, no camera: plane detection, spatial mesh and anchors need no runtime permission on
+         the emulator (design container.permissions; device to be confirmed). -->
+
+    <!-- The passthrough camera, read back to find the sheet of paper (SpatialML Readback Mode). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Readback of camera-derived tensors also needs this (Secure MR server log, 2026-10-23: "readbackTensor >>> caller is not granted with Permission: com.picovr.permission.SPATIAL_DATA"). -->
+    <uses-permission android:name="com.picovr.permission.SPATIAL_DATA" />
+
+    <application
+        android:name=".platform.SpatialApplication"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.TraceLight"
+        tools:targetApi="31">
+
+        <meta-data
+            android:name="pico.spatial.use_experimental_api"
+            android:value="1" />
+
+        <activity
+            android:name=".platform.LaunchActivity"
+            android:exported="true"
+            android:theme="@style/Theme.TraceLight">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- DefaultStage: one Mixed Stage (Full Space, passthrough) holds the whole product -->
+            <meta-data
+                android:name="pico.spatial.stage.id"
+                android:value="TraceLightStage" />
+            <meta-data
+                android:name="pico.spatial.stage.style"
+                android:value="1" />
+            <meta-data
+                android:name="pico.spatial.stage.immersion"
+                android:value="0" />
+            <meta-data
+                android:name="pico.spatial.stage.immersion_min"
+                android:value="0" />
+            <meta-data
+                android:name="pico.spatial.stage.immersion_max"
+                android:value="0" />
+        </activity>
+
+        <meta-data android:name="icon.3d.list" android:resource="@array/icon_3d_list" />
+        <meta-data android:name="icon.sdf.list" android:resource="@array/icon_sdf_list" />
+    </application>
+
+</manifest>

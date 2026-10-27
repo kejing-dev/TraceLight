@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">透写台</string>
+    <string name="lang_code">zh</string>
+
+    <string name="action_cancel">取消</string>
+    <string name="action_restart">重来</string>
+    <string name="hint_stick">摇杆左右转动</string>
+
+    <string name="s00_loading">准备中…</string>
+
+    <string name="s01_paper">一张 A4 白纸</string>
+    <string name="s01_pencil">一支铅笔</string>
+    <string name="s01_desk">一张够亮的桌子</string>
+    <string name="s01_line">把纸平放在桌上，用胶带粘住两个角更稳</string>
+    <string name="s01_ruler">透视课有直尺更好</string>
+    <string name="s01_ready">准备好了</string>
+
+    <string name="s02_look_down">低头看看桌面</string>
+    <string name="s02_hint">慢慢看一遍桌面</string>
+
+    <string name="s03_drop">看着你的纸，捏一下放下纸框</string>
+    <string name="s03_not_desk">这里不是桌面</string>
+    <string name="s03_look">看着你的纸，会自动找到它</string>
+    <string name="s03_finding">找到了，稍等别动…</string>
+    <string name="s03_hold_still">手先别放在纸上</string>
+    <string name="s03_found">找到你的纸了</string>
+    <string name="s03_found_hint">绿色线框贴上纸边了吗？</string>
+    <string name="s03_adjust">手动调整</string>
+    <string name="s03_slow">找不到？深色桌面、光线亮一点更好找；也可以捏一下手动放框</string>
+
+    <string name="corner_ll">左下角</string>
+    <string name="corner_lr">右下角</string>
+    <string name="corner_ur">右上角</string>
+    <string name="corner_ul">左上角</string>
+    <string name="s04_drag">把 %1$s 拖到纸的%2$s</string>
+    <string name="s04_all_set">四个角都放好了，点「对好了」</string>
+    <string name="s04_recheck">%1$s 对上了吗？没对上就拖一下</string>
+    <string name="s04_corner_ok">对上了 →</string>
+    <string name="s04_aligned">对好了</string>
+    <string name="s04_tip">也可以：用手柄尖碰纸角，按扳机</string>
+
+    <string name="s05_off">%1$s 差了 %2$d mm，再拖一下</string>
+    <string name="s05_moved">纸有没有被碰动？</string>
+    <string name="s05_letter">这张纸好像不是 A4（210 × 297 mm）。本版本只支持 A4</string>
+
+    <string name="s06_done">对好了</string>
+
+    <string name="s16_no_desk">找不到桌面</string>
+    <string name="s16_hint">开灯、靠近桌子、慢慢低头看一圈</string>
+    <string name="s16_retry">再找找</string>
+
+    <string name="s18_permission">需要空间权限，才能把线投到你的纸上</string>
+    <string name="s18_grant">授权</string>
+
+    <string name="s20_title">标定 · 第 %1$d 轮</string>
+    <string name="s20_gain">增益 %1$s</string>
+    <string name="s20_record">记一次（%1$d）</string>
+    <string name="s20_how">坐正，头在纸中心上方约 40 cm。说出每个蓝十字的中心落在第几环。</string>
+    <string name="s20_figure_on">测试图</string>
+    <string name="s20_figure_off">关测试图</string>
+    <string name="s20_height">高度</string>
+    <string name="s20_test_tap">下一步（测试）· %1$d</string>
+    <string name="s20_next_round">下一轮</string>
+</resources>
