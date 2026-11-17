@@ -30,6 +30,13 @@ class PlaneTracker {
         // subscribe first, then start: no event is lost
         subscription = PlaneTrackingManager.subscribeAnchorUpdate { u -> if (Looper.myLooper() == Looper.getMainLooper()) handle(u) else main.post { handle(u) } }
         runCatching { PlaneTrackingManager.start() }.onFailure { TraceLog.e("PLANES start failed: $it", it) }
+        io.embodit.tracelight.platform.SpatialDataPermission.whenGranted {
+            if (subscription != null) {
+                runCatching { PlaneTrackingManager.stop() }
+                runCatching { PlaneTrackingManager.start() }
+                android.util.Log.i("SpatialData", "PlaneTrackingManager restarted after grant")
+            }
+        }
         TraceLog.i("PLANES tracking started state=${runCatching { PlaneTrackingManager.state }.getOrNull()}")
     }
 

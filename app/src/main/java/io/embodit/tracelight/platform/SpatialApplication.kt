@@ -7,6 +7,7 @@ import io.embodit.tracelight.mainApp
 class SpatialApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        SpatialDataPermission.install(this)
         launch(::mainApp)
     }
 }

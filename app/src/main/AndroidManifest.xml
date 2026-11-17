@@ -2,8 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- No network, no camera: plane detection, spatial mesh and anchors need no runtime permission on
-         the emulator (design container.permissions; device to be confirmed). -->
+    <!-- Plane detection / spatial mesh need com.picovr.permission.SPATIAL_DATA on the headset (runtime;
+         platform/SpatialDataPermission asks for it). The emulator reports planes without it. -->
+    <uses-permission android:name="com.picovr.permission.SPATIAL_DATA" />
+
 
     <application
         android:name=".platform.SpatialApplication"
